@@ -1,3 +1,4 @@
 .syncedlyrics/
 .python_version
 shell.nix
+share/
