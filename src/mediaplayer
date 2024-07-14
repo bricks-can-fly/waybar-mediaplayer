@@ -617,16 +617,6 @@ def main():
     global config
     config = load_config_or_defaults()
 
-    fp = Path(sys.argv[0]).parent.resolve() / "config.json"
-    if not fp.is_file():
-        logging.critical(f"ERROR: Configuration file {fp} not found")
-        sys.exit(1)
-    with open(fp, "r") as fh:
-        # global config
-        config = json.load(fh)
-    logger.debug(f"config={config}")
-    assert isinstance(config, dict)
-
     # Remove album art if present
     delete_album_art()
 
