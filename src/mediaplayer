@@ -18,6 +18,8 @@ import urllib
 from collections import namedtuple
 from functools import partial
 from pathlib import Path
+import b64decode from base64
+import re
 
 import gi
 import requests
@@ -211,7 +213,20 @@ def signal_album_art_change():
 
 def download_art(art_url):
     logger.debug("Updating album art")
-    if art_url.startswith("http"):
+    global artfp
+    if art_url.startswith("data:image"):
+        m = re.match('data:image/(.*);(.*),', art_url[0:40])
+        if m:
+            img_type = m.group(1)
+            enc = m.group(2)
+            logger.debug(f"Album art is '{img_type}' with '{enc}' encoding")
+            if enc == "base64":
+                with open(artfp, "wb") as fh:
+                    fh.write(base64.b64decode(art_url[22:]))
+                logger.debug(f"Album art decoded to '{artfp}'")
+            else:
+                logger.debug(f"ERROR: Unsupported {enc} encoding, can't convert to art image")
+    elif art_url.startswith("http://"):
         resp = requests.get(art_url)
         with open(artfp, "wb") as fh:
             fh.write(resp.content)
@@ -269,7 +284,13 @@ def update_metadata(player, metadata, manager):
         return False
     # Download album art
     art_url = metadata.get("mpris:artUrl", None)
-    if art_url and art_url != last_art_url:
+    is_art_chanded = False if last_art_url else True
+    if not is_art_chanded and art_url:
+        if art_url.startswith("data:image"):
+            is_art_chanded = True if art_url[0:40] != last_art_url[0:40] else False
+        elif art_url != last_art_url:
+            is_art_chanded = True
+    if is_art_chanded:
         download_art(art_url)
         last_art_url = art_url
     # Notification
@@ -434,6 +455,7 @@ def update_progressbar(manager, player):
             )
             length = 100
             pos = 0
+
     # Compute song percentage
     perc = (pos / (length / config["length_factor"])) * 100
     perc = min(perc, 100.0)
@@ -587,7 +609,7 @@ def load_config_or_defaults():
             logger.info("Saving defaults to user config.json found")
             if not fp_cfg_user.parent.is_dir(): os.mkdir(fp_cfg_user.parent)
             with open(fp_cfg_user, "x") as fh:
-                json.dump(cfg, fh)
+                json.dump(cfg, fh, indent = 4)
         return cfg
 
 def main():
