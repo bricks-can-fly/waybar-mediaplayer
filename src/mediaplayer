@@ -18,7 +18,7 @@ import urllib
 from collections import namedtuple
 from functools import partial
 from pathlib import Path
-import b64decode from base64
+from base64 import b64decode
 import re
 
 import gi
@@ -222,7 +222,7 @@ def download_art(art_url):
             logger.debug(f"Album art is '{img_type}' with '{enc}' encoding")
             if enc == "base64":
                 with open(artfp, "wb") as fh:
-                    fh.write(base64.b64decode(art_url[22:]))
+                    fh.write(b64decode(art_url[len(f"data:image/{img_type};base64"):]))
                 logger.debug(f"Album art decoded to '{artfp}'")
             else:
                 logger.debug(f"ERROR: Unsupported {enc} encoding, can't convert to art image")
