@@ -27,7 +27,7 @@ import syncedlyrics
 from PIL import Image
 
 gi.require_version("Playerctl", "2.0")
-from gi.repository import GLib, Playerctl  # noqa: E402
+from gi.repository import GLib, Gio, Playerctl  # noqa: E402
 
 # Internal global variables
 config = None
@@ -44,19 +44,29 @@ format_class = None
 icons = {"play": " ", "stop": " "}
 is_text_rotating = None
 lyrics = dict()
+running_players = []
+main_player = None
 
 
-def on_player_appeared(manager, player, requested_player):
+def on_player_appeared(manager, player):
     logger.debug("I was called")
-    if player and (player.name == requested_player):
+    if player.name.startswith(tuple(config["players"])):
         init_player(manager, player)
+        update_running(manager, config["players"])
+        update_main(manager,  config["players"], config["priority"])
+        logger.debug(f"New player {player.name} appeared")
     else:
-        logger.debug(
-            "New player appeared, but it's not the selected player, skipping"
-        )
-
+        logger.debug("New player appeared, \
+                      but it's not the selected player, skipping")
     logger.debug("Returning True")
     return True
+
+
+# get running players and filter them by config["players"]
+def update_running(manager, allowed):
+    global running_players
+    running_players = [ rp for rp in manager.props.player_names 
+                            if rp.name.startswith(tuple(allowed))]
 
 
 def delete_album_art():
@@ -214,6 +224,11 @@ def signal_album_art_change():
 def download_art(art_url):
     logger.debug("Updating album art")
     global artfp
+    if not art_url:
+        logger.debug(f"Empty album art_url")
+        delete_album_art()
+        signal_album_art_change()
+        return
     if art_url.startswith("data:image"):
         m = re.match('data:image/(.*);(.*),', art_url[0:40])
         if m:
@@ -264,9 +279,9 @@ def send_notification(summary, body):
     cmd = [
         "dunstify",
         "--app-name=waybar-mediaplayer",
-        "--icon=" + artfp,
-        summary,
-        body,
+        f"--icon={artfp}" if artfp else "",
+        summary if summary else "",
+        body if body else "",
     ]
     logger.error(f"Running {cmd}")
     subprocess.run(cmd)
@@ -420,10 +435,20 @@ def update_progressbar(manager, player):
     global last_metadata, lyrics
     logger.debug("I was called")
     # Get percentage in the track
-    pos = player.get_position()
-    logger.debug(f"pos={pos}")
+    try:
+        pos = player.get_position()
+    except GLib.Error as err:
+        if err.domain == "g-dbus-error-quark" and \
+            err.code == 7: # NOT_SUPPORTED:
+            logger.debug(f"Player {player.props.player_name} doesn't support position gathering")
+            pos = 0
+            skip_cli = True
+        else:
+            raise
+    else:
+        logger.debug(f"pos={pos}")
     # If it doesn't work, use CLI utility
-    if pos == 0:
+    if pos == 0 and not skip_cli:
         cmd = ["playerctl", "--player=" + player.props.player_name, "position"]
         pos = subprocess.run(cmd, capture_output=True, text=True).stdout
         pos = float(pos) * (10**6)
@@ -581,6 +606,29 @@ def parse_arguments():
     parser.add_argument("-v", "--verbose", action="count", default=0)
     return parser.parse_args()
 
+
+def update_main(manager, players, order):
+    logger.debug("I was called")
+    player = None
+    if running_players:
+        if order == "asis":
+            player = running_players[0]
+        elif order == "manual":
+            for rp in running_players:
+                if rp.name.startswith(tuple(players)):
+                    player = rp
+                    break
+            if player:
+                logger.debug(f"Controlled player is '{player.name}'")
+            else:
+                logger.debug("Can't select which player to control. Returning None")
+        else:
+            logger.critical("Wrong players priority specified!")
+            sys.exit(1)
+    global main_player
+    main_player = player
+
+
 # Load configuration from ~/.config/waybar/mediaplayer/config.json
 # Or load from <pkg/share/config.json and write to user config.json
 def load_config_or_defaults():
@@ -650,47 +698,40 @@ def main():
     digits = int(digits)
     format_class = partial(lambda x, y: str(round(x, y)), y=digits)
 
+    # Parse args, select and init player control
     manager = Playerctl.PlayerManager()
 
-    requested_player = config["player_name"].split(".")[0]
-    logger.debug(
-        f"Splitting player_name on `.`. requested_player={requested_player}"
-    )
+    update_running(manager, config["players"])
+    update_main(manager, config["players"], config["priority"])
 
-    ini = False
-    for player in manager.props.player_names:
-        logger.debug(f"Found player '{player.name}'")
-        if not player.name.startswith(requested_player):
-            logger.debug("This is not the filtered player, skipping it")
-            continue
+    if main_player:
         if arguments.command == "play-pause":
-            Playerctl.Player.new(player.name).play_pause()
+            Playerctl.Player.new(main_player.name).play_pause()
             sys.exit(0)
         elif arguments.command == "next":
-            Playerctl.Player.new(player.name).next()
+            Playerctl.Player.new(main_player.name).next()
             sys.exit(0)
         elif arguments.command == "previous":
-            Playerctl.Player.new(player.name).previous()
+            Playerctl.Player.new(main_player.name).previous()
             sys.exit(0)
         elif arguments.command == "monitor":
             logger.debug("Initializing player")
-            init_player(manager, player)
-            ini = True
+            init_player(manager, main_player)
         else:
             logger.critical(f"Invalid argument {sys.argv[1]}")
             sys.exit(1)
-
-    if not ini:
+    else:
         logger.debug("No player found. Printing empty")
         write_output()
 
     loop = GLib.MainLoop()
 
-    on_player_appeared_inst = partial(
-        on_player_appeared, requested_player=requested_player
-    )
-    # manager.connect("player-appeared", on_player_appeared)
-    manager.connect("name-appeared", on_player_appeared_inst)
+    # on_player_appeared_inst = partial(
+    #     on_player_appeared, requested_player=requested_player
+    # )
+    
+    manager.connect("name-appeared", on_player_appeared)
+    # manager.connect("name-appeared", on_player_appeared_inst)
     manager.connect("player-vanished", on_player_vanished)
 
     # signal.signal(signal.SIGINT, signal_handler)
