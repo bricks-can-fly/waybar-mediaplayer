@@ -27,7 +27,7 @@ import syncedlyrics
 from PIL import Image
 
 gi.require_version("Playerctl", "2.0")
-from gi.repository import GLib, Gio, Playerctl  # noqa: E402
+from gi.repository import GLib, Playerctl  # noqa: E402
 
 # Internal global variables
 config = None
@@ -434,6 +434,7 @@ def gen_class(perc):
 def update_progressbar(manager, player):
     global last_metadata, lyrics
     logger.debug("I was called")
+    skip_cli = False
     # Get percentage in the track
     try:
         pos = player.get_position()
@@ -496,7 +497,9 @@ def update_progressbar(manager, player):
     elapsed = (time.time() - last_rot_time) * 1000
     rot_needs_update = elapsed > config["text_rot_int"]
     # Check if progress bar needs to be updated
-    diff = metadata["perc"] - last_metadata["perc"] if last_metadata else 99999
+    # diff = metadata["perc"] - last_metadata["perc"] if last_metadata else 99999
+    diff = metadata["perc"] - last_metadata["perc"] if last_metadata else 0
+    logger.debug(f"diff: {metadata['perc']} - {last_metadata['perc'] if last_metadata else 99999} > {config['interval']}")
     pbar_needs_update = diff > config["interval"]
     # Check if lyrics needs an update
     if lyrics:
